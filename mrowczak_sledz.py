@@ -7,6 +7,21 @@ paths = {10: "sch10.txt", 20: "sch20.txt", 50: "sch50.txt", 100: "sch100.txt", 2
          1000: "sch1000.txt"}
 work = 0
 
+alpha = 1
+beta = 0
+ro = 0.01
+
+def normalizate(d):
+    # d is a (n x dimension) np array
+    d -= np.min(d, axis=0)
+    d /= np.ptp(d, axis=0)
+    su = np.sum(d)
+    d /= su
+    return d
+
+
+
+
 
 class Task:
     def __init__(self, ID, p, a, b):
@@ -43,16 +58,20 @@ class Instance:
     start = 0
     d = 0
     
+    
     def __init__(self, k, n, h):
         self.tasks = []
         self.k = k
         self.n = n
         self.h = h
         self.pheromoneR = []
-        self.pheromoneR_next = []
         self.pheromone = []
-        self.pheromone_next = []
+        #moje_start
+        self.pheromone_start = [] 
+        #moje_stop
         self.working_time = work
+
+        
 
     def pSum(self):
         pSum = 0
@@ -102,8 +121,29 @@ class Instance:
         self.schedule = schedule[:]
         print("First: ", self.result)
 
+
+    def update_pheromone(self,schedule):
+        for i in range(self.n-1):
+
+            self.pheromone[schedule[i].ID,schedule[i+1].ID] += 1
+
+    def update_pheromones(self,ant):
+        res = ant.result
+        value_added = (1/res)
+        self.pheromoneR[ant.r] = self.pheromoneR[ant.r] + value_added
+        self.pheromone_start[ant.schedule[0].ID] =  self.pheromone_start[ant.schedule[0].ID]  + value_added
+        for i in range(self.n-1):
+            self.pheromone[ant.schedule[i].ID,ant.schedule[i+1].ID] = self.pheromone[ant.schedule[i].ID,ant.schedule[i+1].ID] + value_added
+
+
+    def vapo_pheromones(self):
+        self.pheromone *= (1-ro)
+        self.pheromone_start *= (1-ro)
+        self.pheromoneR *= (1-ro)
+
     def initial_colony(self, size):
         colony = []
+        self.colony_size = size
         for _ in range(size):
             ant = Ant()
             ant.r = random.randrange(self.d+1)
@@ -114,36 +154,95 @@ class Instance:
             ant.result = self.calculate_result(ant.schedule, ant.r)
             colony.append(ant)
         colony.sort()
-        if colony[0].result < self.result:
-            self.result = colony[0].result
-            self.schedule = colony[0].schedule[:]
-            self.r = colony[0].r
+        self.compare_new_result(colony[0].result,colony[0].r,colony[0].schedule)
+        self.vapo_pheromones()
         for ant in range(int(size/5)):
-            self.pheromoneR[colony[ant].r] += 1
-            schedule = colony[ant].schedule
-            for i in range(self.n-1):
-                self.pheromone[schedule[i].ID, schedule[i+1].ID] = min([self.pheromone[schedule[i].ID, schedule[i+1].ID] + 1, 5])
-            # print(colony[ant].result)
-        print(self.pheromone)
-        print(self.pheromoneR)
+            self.update_pheromones(colony[ant]) 
         return colony
+    
+
+    def compare_new_result(self,result,r,schedule):
+        if(result<self.result):
+            self.result = result
+            self.r = r 
+            self.schedule = schedule[:]
+
+    def choose_next_task(self,tasks,id):
+        temp_pheromone = self.pheromone[id][:]
+        curr_pheromone = []
+        tasks_ids = [x.ID for x in tasks]
+        for task in tasks_ids:
+            curr_pheromone.append(temp_pheromone[task])
+        curr_pheromone=normalizate(curr_pheromone)
+        next_id = np.random.choice(tasks_ids,p=curr_pheromone)
+        return next_id
+
+
+
+    def calculate_all_colonies(self,G,size):
+        
+        for g in range(G):
+            colony = []
+            for _ in range(size):
+                r_s = np.arange(self.d)
+                task_s = np.arange(self.n)
+                ant = Ant()
+                prob_r = normalizate(self.pheromoneR)
+                ant.r = np.random.choice(r_s,p=prob_r)
+                tasks = self.tasks[:]
+                task_prob = normalizate(self.pheromone_start)
+                last_id = np.random.choice(task_s,p=task_prob)
+                start = tasks[last_id]
+                ant.schedule.append(start)
+                tasks.remove(start)
+                task_s = np.delete(task_s,last_id)
+                while(len(tasks)>1):
+                    last_id = self.choose_next_task(tasks,last_id)
+                    curr_task = [x for x in tasks if x.ID == last_id]
+                    curr_task = curr_task[0]
+                    ant.schedule.append(curr_task)
+                    tasks.remove(curr_task)
+                
+                curr_task = tasks.pop(0)
+                ant.schedule.append(curr_task)
+                ant.result = self.calculate_result(ant.schedule,ant.r)
+
+                colony.append(ant)
+            colony.sort()
+            self.compare_new_result(colony[0].result,colony[0].r,colony[0].schedule)
+            self.vapo_pheromones()
+            for ant in range(int(size/3)):
+                self.update_pheromones(colony[ant])
+
+
+
+
+
+
+
+
+
+
 
     def calculate_schedule(self):
         self.start = times.perf_counter()
         self.first_calculate()
         self.tasks.sort(key=lambda task: task.ID)
         m = 100  # size of colony
-        G = 100
-        g = 0
-        self.pheromoneR = np.zeros(self.d)
-        self.pheromone = np.zeros((self.n, self.n))
-        self.pheromoneR_next = np.zeros(self.d)
-        self.pheromone_next = np.zeros((self.n, self.n))
+        G = 10000
+        self.pheromoneR = np.ones(self.d)
+        self.pheromone = np.ones((self.n, self.n))
+        self.pheromone_start = np.ones((self.n))
+
+        self.pheromone_start *= 1/self.result
+        self.pheromoneR *= 1/self.result
+        self.pheromone *= 1/self.result
+
 
         self.initial_colony(m)
+        self.calculate_all_colonies(G,m)
 
-
-
+        print(self.pheromone)
         self.duration = times.perf_counter() - self.start
         print("time: ", self.duration)
 
@@ -158,6 +257,7 @@ class Instance:
             result += max(self.d - time, 0) * task.a
             result += max(time - self.d, 0) * task.b
         print("Result: ", result)
+        print("R: ",self.r)
         return "correct" if self.result == result else "incorrect"
 
     def print_result(self):
@@ -214,9 +314,9 @@ def calculate():
     checkResult("moje/" + str(instance) + ".txt")
 
 
-k = 2
-h = 0.8
+k = 9
+h = 0.6
 n = 10
-work = 10
+work = 10   
 
 calculate()
